@@ -1,0 +1,20 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: local-only
+  group_by: [alertname, instance]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers:
+        - severity="critical"
+      receiver: local-only
+      continue: false
+
+# No email, webhook, or chat destination is assumed. Alerts are visible in the
+# private Alertmanager UI/API and Prometheus until an operator configures a
+# receiver with their own notification endpoint and credentials.
+receivers:
+  - name: local-only

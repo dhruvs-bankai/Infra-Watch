@@ -1,0 +1,108 @@
+import { expect, test } from '@playwright/test'
+
+// Deterministic API fixtures are test-only. Application views query FastAPI,
+// Prometheus, and Alertmanager directly in development and production.
+test('administrator can use the core monitoring workflows', async ({ page }) => {
+  const id = '9a20f01a-7c70-4d25-9137-1b6b73f0d011'
+  const server = { id, name: 'e2e-node-01', host: '10.20.1.15', exporter_port: 9100, environment: 'staging', description: 'API test host', tags: ['api', 'e2e'], created_at: '2026-11-12T10:00:00Z', updated_at: '2026-11-12T10:00:00Z' }
+  let registered: typeof server | null = null
+  let rejectLogin = true
+  let rejectRegistration = true
+  await page.route('**/api/v1/**', async route => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const path = url.pathname.replace('/api/v1', '')
+    const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
+    if (path === '/auth/login' && rejectLogin) return json({ detail: 'Invalid username or password' }, 401)
+    if (path === '/auth/login') return json({ access_token: 'e2e-test-token', expires_in: 1800, user: { id: 'test-user', username: 'operator', is_admin: true } })
+    if (path === '/auth/me') return json({ id: 'test-user', username: 'operator', is_admin: true })
+    if (path === '/auth/logout') return json({ message: 'Session invalidated' })
+    if (path === '/metrics/overview') return json({ total_servers: registered ? 1 : 0, online_servers: registered ? 1 : 0, offline_servers: 0, unknown_servers: 0, exporter_errors: 0, avg_cpu_percent: registered ? 23.5 : null, avg_memory_percent: registered ? 52.2 : null, total_disk_bytes: registered ? 104857600000 : null, network_in_bytes_per_second: registered ? 15000 : null, network_out_bytes_per_second: registered ? 7000 : null, servers: registered ? [{ id, name: server.name, environment: server.environment, status: 'online', cpu_percent: 23.5, memory_percent: 52.2 }] : [], as_of: new Date().toISOString() })
+    if (path === '/servers' && request.method() === 'GET') return json({ items: registered ? [registered] : [], total: registered ? 1 : 0 })
+    if (path === '/servers' && request.method() === 'POST' && rejectRegistration) { rejectRegistration = false; return json({ detail: 'Node Exporter did not answer on the allowed endpoint. Install Node Exporter and verify the firewall.' }, 422) }
+    if (path === '/servers' && request.method() === 'POST') { registered = { ...server, ...request.postDataJSON() }; return json(registered, 201) }
+    if (path === `/servers/${id}` && request.method() === 'PATCH') { registered = { ...server, ...request.postDataJSON() }; return json(registered) }
+    if (path === `/servers/${id}` && request.method() === 'DELETE') { registered = null; return json({ message: 'Server removed from inventory' }) }
+    if (path === `/servers/${id}/metrics`) return json({ server_id: id, server_name: server.name, metric: url.searchParams.get('metric') ?? 'cpu', unit: 'percent', points: Array.from({ length: 6 }, (_, i) => ({ timestamp: new Date(Date.now() - (5 - i) * 300000).toISOString(), value: 20 + i })) })
+    if (path === '/alerts') return json({ items: [{ fingerprint: 'test-alert', name: 'NodeCPUUsageHigh', severity: 'warning', status: 'active', instance: server.name, summary: 'CPU utilization is high', description: 'Test fixture alert', started_at: new Date().toISOString(), ends_at: '' }] })
+    return json({ detail: `Unexpected test request ${request.method()} ${path}` }, 500)
+  })
+
+  await page.goto('/')
+  await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible()
+  await page.getByLabel('Username').fill('operator')
+  await page.getByLabel('Password').fill('incorrect-password')
+  await page.getByRole('button', { name: 'Sign in' }).click()
+  await expect(page.getByRole('alert')).toContainText('Invalid username or password')
+  await page.getByLabel('Password').fill('fixture-password')
+  rejectLogin = false
+  await page.getByRole('button', { name: 'Sign in' }).click()
+  await expect(page.getByRole('heading', { name: 'Infrastructure at a glance' })).toBeVisible()
+  await expect(page.getByText('No servers registered')).toBeVisible()
+  await page.getByRole('button', { name: 'Light appearance' }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  await page.getByRole('button', { name: 'Dark appearance' }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+
+  await page.getByRole('button', { name: 'Server inventory' }).click()
+  await page.getByRole('button', { name: 'Register server' }).click()
+  await page.getByLabel('Server name').fill(server.name)
+  await page.getByLabel('Hostname or private IP').fill(server.host)
+  await page.getByLabel('Server environment').selectOption('staging')
+  await page.getByLabel('Description').fill(server.description)
+  await page.getByLabel('Tags').fill('api, e2e')
+  await page.getByRole('button', { name: 'Register server' }).last().click()
+  await expect(page.getByRole('alert')).toContainText('Node Exporter did not answer')
+  await page.getByRole('button', { name: 'Register server' }).last().click()
+  await expect(page.getByRole('status')).toContainText('Server registered')
+  await expect(page.getByText('e2e-node-01')).toBeVisible()
+  await expect(page.getByText('23.5%').first()).toBeVisible()
+  await page.getByPlaceholder('Search name, host, or tag…').fill('missing-host')
+  await expect(page.getByText('No matching servers')).toBeVisible()
+  await page.getByPlaceholder('Search name, host, or tag…').fill('api')
+  await page.getByLabel('Filter by environment').selectOption('staging')
+  await page.getByLabel('Filter by status').selectOption('online')
+  await expect(page.getByText('e2e-node-01')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Edit e2e-node-01' }).click()
+  await page.getByLabel('Description').fill('Updated by browser test')
+  await page.getByRole('button', { name: 'Save changes' }).click()
+  await expect(page.getByRole('status')).toContainText('Server details saved')
+  await page.getByText('e2e-node-01').first().click()
+  await expect(page.getByRole('heading', { name: 'e2e-node-01' })).toBeVisible()
+  await expect(page.getByText(/real Prometheus samples/)).toBeVisible()
+  await page.getByLabel('Metric').selectOption('memory_used')
+  await expect(page.getByLabel('Metric')).toHaveValue('memory_used')
+
+  await page.getByRole('button', { name: 'Metrics explorer' }).click()
+  await expect(page.getByRole('heading', { name: 'Signals over time' })).toBeVisible()
+  await expect(page.getByText('No development fixture data is shown here.')).toBeVisible()
+  await page.getByRole('button', { name: 'Alert activity' }).click()
+  await expect(page.getByText('CPU utilization is high')).toBeVisible()
+  await page.getByRole('button', { name: /Resolved/ }).click()
+  await expect(page.getByText('No alert history yet')).toBeVisible()
+  await page.getByRole('button', { name: /Active/ }).click()
+  await expect(page.getByText('CPU utilization is high')).toBeVisible()
+  await page.getByRole('button', { name: 'Node Exporter guide' }).click()
+  await expect(page.getByRole('heading', { name: 'Bring your Linux hosts online' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Official downloads' })).toHaveAttribute('href', 'https://prometheus.io/download/')
+  await page.getByLabel('Linux architecture').selectOption('arm64')
+  await expect(page.locator('.code-block pre').first()).toContainText('linux-arm64')
+  await page.getByRole('button', { name: 'Copy commands' }).first().click()
+  await expect(page.getByRole('status')).toContainText(/Copied|Clipboard/)
+  await page.getByRole('button', { name: 'Settings' }).click()
+  await expect(page.getByRole('heading', { name: 'Settings and integrations' })).toBeVisible()
+  await page.getByRole('button', { name: 'Server inventory' }).click()
+  await page.getByText('e2e-node-01').first().click()
+  page.once('dialog', dialog => dialog.accept())
+  await page.getByRole('button', { name: 'Remove' }).click()
+  await expect(page.getByRole('status')).toContainText('Server removed')
+  await expect(page.getByText('No servers registered')).toBeVisible()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.getByRole('button', { name: 'Open navigation' }).click()
+  await expect(page.getByRole('navigation', { name: 'Main navigation' })).toBeVisible()
+  await page.getByRole('button', { name: 'Metrics explorer' }).click()
+  await page.getByRole('button', { name: 'Open navigation' }).click()
+  await page.getByRole('button', { name: 'Sign out' }).click()
+  await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible()
+})

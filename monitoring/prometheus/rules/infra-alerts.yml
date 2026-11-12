@@ -1,0 +1,53 @@
+groups:
+  - name: infrawatch-node-alerts
+    interval: 30s
+    rules:
+      - alert: NodeExporterUnavailable
+        expr: up{job="node"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          category: availability
+        annotations:
+          summary: "Node Exporter is unavailable on {{ $labels.instance }}"
+          description: "Prometheus has failed to scrape {{ $labels.instance }} for at least 2 minutes. Check host reachability, Node Exporter, and firewall rules."
+
+      - alert: NodeCPUUsageHigh
+        expr: 100 * (1 - avg by (instance, environment) (rate(node_cpu_seconds_total{job="node",mode="idle"}[5m]))) > 85
+        for: 10m
+        labels:
+          severity: warning
+          category: cpu
+        annotations:
+          summary: "CPU usage is high on {{ $labels.instance }}"
+          description: "CPU usage has remained above 85% for 10 minutes (current value {{ $value | printf \"%.1f\" }}%)."
+
+      - alert: NodeMemoryUsageHigh
+        expr: 100 * (1 - (node_memory_MemAvailable_bytes{job="node"} / node_memory_MemTotal_bytes{job="node"})) > 90
+        for: 10m
+        labels:
+          severity: warning
+          category: memory
+        annotations:
+          summary: "Memory usage is high on {{ $labels.instance }}"
+          description: "Memory usage has remained above 90% for 10 minutes (current value {{ $value | printf \"%.1f\" }}%)."
+
+      - alert: NodeFilesystemSpaceLow
+        expr: 100 * (1 - (node_filesystem_avail_bytes{job="node",fstype!~"tmpfs|devtmpfs|overlay|squashfs|nsfs|ramfs",mountpoint!~"/run.*|/var/lib/docker.*"} / node_filesystem_size_bytes{job="node",fstype!~"tmpfs|devtmpfs|overlay|squashfs|nsfs|ramfs",mountpoint!~"/run.*|/var/lib/docker.*"})) > 90
+        for: 10m
+        labels:
+          severity: warning
+          category: disk
+        annotations:
+          summary: "Filesystem usage is high on {{ $labels.instance }} ({{ $labels.mountpoint }})"
+          description: "Filesystem usage has remained above 90% for 10 minutes (current value {{ $value | printf \"%.1f\" }}%). Check available capacity and mount labels."
+
+      - alert: NodeFilesystemNearlyFull
+        expr: node_filesystem_avail_bytes{job="node",fstype!~"tmpfs|devtmpfs|overlay|squashfs|nsfs|ramfs",mountpoint!~"/run.*|/var/lib/docker.*"} / node_filesystem_size_bytes{job="node",fstype!~"tmpfs|devtmpfs|overlay|squashfs|nsfs|ramfs",mountpoint!~"/run.*|/var/lib/docker.*"} < 0.05
+        for: 5m
+        labels:
+          severity: critical
+          category: disk
+        annotations:
+          summary: "Less than 5% filesystem space remains on {{ $labels.instance }} ({{ $labels.mountpoint }})"
+          description: "Free space has remained below 5% for 5 minutes."
