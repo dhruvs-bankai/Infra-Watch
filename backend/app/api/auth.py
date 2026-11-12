@@ -17,6 +17,15 @@ router = APIRouter(prefix="/auth", tags=["authentication"])
 SessionDep = Annotated[Session, Depends(get_session)]
 
 
+@router.get("/setup-status")
+def setup_status(session: SessionDep) -> dict[str, bool]:
+    setup_state = session.scalar(select(AppSetting).where(AppSetting.key == "initial_admin_setup_complete"))
+    complete = bool(setup_state and setup_state.value.get("complete")) or bool(
+        session.scalar(select(func.count()).select_from(User))
+    )
+    return {"configured": complete}
+
+
 def _token_response(request: Request, user: User) -> TokenResponse:
     settings = request.app.state.settings
     token, expires_at = create_access_token(

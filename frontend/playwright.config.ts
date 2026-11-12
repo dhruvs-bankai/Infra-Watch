@@ -2,6 +2,7 @@ import { defineConfig, devices } from '@playwright/test'
 
 export default defineConfig({
   testDir: './tests',
+  testMatch: 'infrawatch.spec.ts',
   fullyParallel: false,
   reporter: 'list',
   timeout: 30000,

@@ -49,55 +49,42 @@ Versions are pinned in frontend lockfiles, backend requirements, Dockerfiles, an
 
 ## Requirements
 
-- Linux host (recommended) with Docker Engine and Docker Compose v2.
+- Linux host (recommended) with Docker Engine and Docker Compose v2.20 or newer (the root Compose file uses `include`).
 - 2 CPU cores and 4 GB RAM minimum for a small development fleet; provision additional disk for Prometheus retention and backups.
 - TCP/8080 to access InfraWatch. TCP/9100 from the monitoring host to each Node Exporter host.
 - Node Exporter already installed on each Linux server. InfraWatch does not deploy it.
 
-Windows and macOS can be used for development with Docker Desktop, but exporter reachability depends on the host's Docker networking and routing configuration.
+Windows and macOS can run InfraWatch with Docker Desktop and Compose v2.20 or newer, but exporter reachability depends on Docker Desktop networking and routing.
 
 ## Install and start
 
-Clone the repository, create the local environment file, and set independent random secrets. Use URL-safe hex secrets to avoid connection-string escaping:
+### Beginner quick start
 
 ```sh
-git clone https://github.com/<owner>/infrawatch.git
-cd infrawatch
-cp .env.example .env
-openssl rand -hex 32  # generate a value for POSTGRES_PASSWORD
-openssl rand -hex 32  # generate a different value for GRAFANA_ADMIN_PASSWORD
-openssl rand -hex 32  # generate a different value for JWT_SECRET_KEY
-openssl rand -hex 32  # generate a different value for INITIAL_ADMIN_SETUP_TOKEN
-```
+Download the repository ZIP from GitHub using **Code → Download ZIP**, extract it, and open a terminal in the extracted `infrawatch` folder. Install Docker Desktop (Windows/macOS) or Docker Engine plus Compose v2 (Linux).
 
-Put each generated value in its matching `.env` key. `.env` is ignored by Git; never commit it or paste secrets into issue trackers. Set `MONITORING_ALLOWED_CIDRS` to only the private subnets containing your exporters. The defaults cover common private ranges and should be narrowed for production.
-
-Start the application from the repository root:
+Create four strong, private random secrets:
 
 ```sh
-docker compose --env-file .env -f docker/docker-compose.yml config --quiet
-docker compose --env-file .env -f docker/docker-compose.yml up -d --build
-docker compose --env-file .env -f docker/docker-compose.yml ps
+# Linux/macOS
+sh ./scripts/prepare-env.sh
+
+# Windows PowerShell (run this instead on Windows)
+powershell -ExecutionPolicy Bypass -File .\scripts\prepare-env.ps1
 ```
 
-Wait for backend, database, monitoring, frontend, and Nginx health checks to pass. Open **http://localhost:8080**. Only Nginx is the primary web entry point. PostgreSQL and Prometheus have no published host ports; optional API, Grafana, and Alertmanager ports bind to loopback for local administration.
+The local `.env` holds private generated secrets and is ignored by Git; never share it. Start the whole application with one Compose command from the repository root:
+
+```sh
+docker compose up -d --build
+docker compose ps
+```
+
+Wait until services are healthy (the one-time `discovery-init` service exits successfully), then open **http://localhost:8080**. The [plain-language beginner guide](docs/beginners-guide.md) explains each step and how to add your first server.
 
 ### Initial administrator setup
 
-There is no default account. Provision one administrator once with the setup secret from `.env`, then sign in through the web UI. For example, on a trusted local shell, use `jq` to JSON-encode the request and enter the values interactively:
-
-```sh
-read -rsp 'Setup token: ' INITIAL_ADMIN_SETUP_TOKEN; echo
-read -rp 'Admin username: ' INFRAWATCH_ADMIN_USERNAME
-read -rsp 'Admin password: ' INFRAWATCH_ADMIN_PASSWORD; echo
-umask 077
-jq -n --arg setup_token "$INITIAL_ADMIN_SETUP_TOKEN" --arg username "$INFRAWATCH_ADMIN_USERNAME" --arg password "$INFRAWATCH_ADMIN_PASSWORD" '{setup_token:$setup_token,username:$username,password:$password}' > /tmp/infrawatch-admin-setup.json
-curl --fail-with-body -X POST http://127.0.0.1:8000/api/v1/auth/setup -H 'Content-Type: application/json' --data-binary @/tmp/infrawatch-admin-setup.json
-rm -f /tmp/infrawatch-admin-setup.json
-unset INITIAL_ADMIN_SETUP_TOKEN INFRAWATCH_ADMIN_PASSWORD
-```
-
-The setup endpoint is disabled after the first administrator is created. Keep the account password secure. The app stores the JWT in tab-scoped session storage and revokes it server-side on sign out.
+There are no default credentials. The first visit shows a one-time administrator setup form. Copy `INITIAL_ADMIN_SETUP_TOKEN` from the private `.env` file, choose a username and strong password, and create the administrator. This setup is disabled after the first account is created. The app stores its JWT in tab-scoped session storage and revokes it server-side on sign out.
 
 ## Add a server
 
@@ -152,6 +139,7 @@ This is the deployed local Compose login page. The dashboard and charts require 
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [Beginner setup guide](docs/beginners-guide.md)
 - [Installation and configuration](docs/configuration.md)
 - [Security review](docs/security.md)
 - [Implementation roadmap and release gates](docs/roadmap.md)

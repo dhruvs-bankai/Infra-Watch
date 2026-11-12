@@ -1,0 +1,6 @@
+name: infrawatch
+
+# Keep service definitions in docker/ while letting users run
+# `docker compose up -d --build` from the extracted repository folder.
+include:
+  - path: docker/docker-compose.yml

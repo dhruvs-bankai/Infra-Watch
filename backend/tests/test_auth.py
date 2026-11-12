@@ -9,9 +9,11 @@ SETUP = {
 
 
 def test_first_run_setup_login_and_logout(client: TestClient) -> None:
+    assert client.get("/api/v1/auth/setup-status").json() == {"configured": False}
     setup = client.post("/api/v1/auth/setup", json=SETUP)
     assert setup.status_code == 201
     assert setup.json()["user"]["username"] == "primaryadmin"
+    assert client.get("/api/v1/auth/setup-status").json() == {"configured": True}
     access_token = setup.json()["access_token"]
     assert len(access_token.split(".")) == 3
 

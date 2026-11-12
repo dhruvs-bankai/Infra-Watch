@@ -1,20 +1,19 @@
 # Installation and configuration
 
-Run commands from the repository root. Compose is stored under `docker/`, so pass the environment file explicitly.
+For the simple install path, see the [beginner setup guide](beginners-guide.md). The root `compose.yaml` includes the maintained service definitions under `docker/`, so run commands from the repository root.
 
 ## Start InfraWatch
 
 ```sh
-cp .env.example .env
-# Set unique random values for every required secret in .env.
-docker compose --env-file .env -f docker/docker-compose.yml config --quiet
-docker compose --env-file .env -f docker/docker-compose.yml up -d --build
+sh ./scripts/prepare-env.sh
+docker compose config --quiet
+docker compose up -d --build
 docker compose --env-file .env -f docker/docker-compose.yml ps
 ```
 
 The UI is at `http://localhost:8080`. Nginx proxies API requests, Grafana, and Alertmanager. Direct API/Grafana/Alertmanager host ports bind to loopback by default. PostgreSQL and Prometheus ports remain private inside Docker networks. Compose health checks gate Nginx startup on frontend, backend, Grafana, and Alertmanager readiness.
 
-Create the first administrator once using `POST /api/v1/auth/setup` and the setup token. The secure interactive example is in the [README](../README.md#initial-administrator-setup). Sign in through the UI after setup. No credentials are hardcoded.
+Create the first administrator once with the browser setup form and the setup token from `.env`. The form appears only when no administrator exists. No credentials are hardcoded.
 
 ## Environment variables
 

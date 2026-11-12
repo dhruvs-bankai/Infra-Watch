@@ -20,6 +20,8 @@ function App() {
   const [mobileNav, setMobileNav] = useState(false)
   const [loginError, setLoginError] = useState('')
   const [loginBusy, setLoginBusy] = useState(false)
+  const [setupRequired, setSetupRequired] = useState(false)
+  const [setupToken, setSetupToken] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [overview, setOverview] = useState<Overview>(emptyOverview)
@@ -31,7 +33,7 @@ function App() {
   const [notice, setNotice] = useState('')
 
   useEffect(() => { document.documentElement.dataset.theme = dark ? 'dark' : 'light'; localStorage.setItem('infrawatch.theme', dark ? 'dark' : 'light') }, [dark])
-  useEffect(() => { if (!getToken()) { setAuthChecked(true); return } api<User>('/auth/me').then(setUser).catch(() => { setToken(null); setUser(null) }).finally(() => setAuthChecked(true)) }, [])
+  useEffect(() => { if (!getToken()) { api<{ configured: boolean }>('/auth/setup-status').then(result => setSetupRequired(!result.configured)).catch(() => {}).finally(() => setAuthChecked(true)); return } api<User>('/auth/me').then(setUser).catch(() => { setToken(null); setUser(null) }).finally(() => setAuthChecked(true)) }, [])
 
   const refresh = useCallback(async () => {
     if (!user) return
@@ -54,12 +56,20 @@ function App() {
     } catch (error) { setLoginError(error instanceof Error ? error.message : 'Sign in failed') }
     finally { setLoginBusy(false) }
   }
+  async function setupAdmin(event: React.FormEvent) {
+    event.preventDefault(); setLoginBusy(true); setLoginError('')
+    try {
+      const response = await api<{ access_token: string; user: User }>('/auth/setup', { method: 'POST', body: JSON.stringify({ setup_token: setupToken, username, password }) })
+      setToken(response.access_token); setUser(response.user); setPassword(''); setSetupToken(''); setSetupRequired(false)
+    } catch (error) { setLoginError(error instanceof Error ? error.message : 'Administrator setup failed') }
+    finally { setLoginBusy(false) }
+  }
   async function logout() { try { await api('/auth/logout', { method: 'POST' }) } catch { /* The local session is cleared even when the API is offline. */ } setToken(null); setUser(null); setPage('overview') }
   function openDetails(server: Server) { setSelected(server); setPage('details') }
   function showNotice(message: string) { setNotice(message); window.setTimeout(() => setNotice(''), 3500) }
 
   if (!authChecked) return <div className="auth-loading"><LoaderCircle className="spin" /> Checking session</div>
-  if (!user) return <Login username={username} password={password} setUsername={setUsername} setPassword={setPassword} onSubmit={login} error={loginError} busy={loginBusy} />
+  if (!user) return <Login setupRequired={setupRequired} setupToken={setupToken} setSetupToken={setSetupToken} username={username} password={password} setUsername={setUsername} setPassword={setPassword} onSubmit={setupRequired ? setupAdmin : login} error={loginError} busy={loginBusy} />
 
   const title = page === 'details' ? selected?.name ?? 'Server details' : nav.find(item => item.id === page)?.label ?? 'Overview'
   return <div className="app-shell">
@@ -89,8 +99,8 @@ function App() {
   </div>
 }
 
-function Login({ username, password, setUsername, setPassword, onSubmit, error, busy }: { username: string; password: string; setUsername: (v: string) => void; setPassword: (v: string) => void; onSubmit: (e: React.FormEvent) => void; error: string; busy: boolean }) {
-  return <div className="login-shell"><div className="login-decoration"><div className="login-grid" /><div className="login-orbit orbit-one" /><div className="login-orbit orbit-two" /><div className="login-brand"><div className="brand-mark"><Activity size={20} /></div><strong>InfraWatch</strong></div><div className="login-message"><div className="eyebrow"><span className="status-dot good" /> INFRASTRUCTURE OBSERVABILITY</div><h1>Know your<br /><em>infrastructure.</em></h1><p>One clear view of every server, signal, and service that keeps your systems running.</p><div className="login-illustration"><div className="signal-line" /><div className="signal-bars"><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /></div><div className="signal-label"><span>FLEET HEALTH</span><strong>Real time · Always on</strong></div></div></div><div className="login-foot">PRIVATE BY DESIGN <span>·</span> SELF-HOSTED MONITORING</div></div><div className="login-panel"><form className="login-form" onSubmit={onSubmit}><div className="mobile-login-brand"><div className="brand-mark"><Activity size={19} /></div><strong>InfraWatch</strong></div><div className="eyebrow">ADMIN CONSOLE</div><h2>Welcome back</h2><p>Sign in to your infrastructure workspace.</p>{error && <div className="form-error" role="alert"><AlertTriangle size={16} />{error}</div>}<label>Username<input autoComplete="username" required value={username} onChange={e => setUsername(e.target.value)} placeholder="Your administrator username" /></label><label>Password<input autoComplete="current-password" type="password" required value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter your password" /></label><button className="button button-primary login-submit" disabled={busy}>{busy ? <><LoaderCircle size={16} className="spin" /> Signing in…</> : <>Sign in <span>→</span></>}</button><div className="login-security"><ShieldCheck size={15} /> Protected with administrator authentication</div><div className="login-help">Initial setup is completed once by the system operator using the documented secure setup process.</div></form><div className="login-copyright">InfraWatch <span>·</span> Open source infrastructure monitoring</div></div></div>
+function Login({ setupRequired, setupToken, setSetupToken, username, password, setUsername, setPassword, onSubmit, error, busy }: { setupRequired: boolean; setupToken: string; setSetupToken: (v: string) => void; username: string; password: string; setUsername: (v: string) => void; setPassword: (v: string) => void; onSubmit: (e: React.FormEvent) => void; error: string; busy: boolean }) {
+  return <div className="login-shell"><div className="login-decoration"><div className="login-grid" /><div className="login-orbit orbit-one" /><div className="login-orbit orbit-two" /><div className="login-brand"><div className="brand-mark"><Activity size={20} /></div><strong>InfraWatch</strong></div><div className="login-message"><div className="eyebrow"><span className="status-dot good" /> INFRASTRUCTURE OBSERVABILITY</div><h1>Know your<br /><em>infrastructure.</em></h1><p>One clear view of every server, signal, and service that keeps your systems running.</p><div className="login-illustration"><div className="signal-line" /><div className="signal-bars"><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /></div><div className="signal-label"><span>FLEET HEALTH</span><strong>Real time · Always on</strong></div></div></div><div className="login-foot">PRIVATE BY DESIGN <span>·</span> SELF-HOSTED MONITORING</div></div><div className="login-panel"><form className="login-form" onSubmit={onSubmit}><div className="mobile-login-brand"><div className="brand-mark"><Activity size={19} /></div><strong>InfraWatch</strong></div><div className="eyebrow">ADMIN CONSOLE</div><h2>{setupRequired ? 'Set up InfraWatch' : 'Welcome back'}</h2><p>{setupRequired ? 'Create the first administrator account. You only do this once.' : 'Sign in to your infrastructure workspace.'}</p>{error && <div className="form-error" role="alert"><AlertTriangle size={16} />{error}</div>}{setupRequired && <><label>One-time setup token<input autoComplete="off" required value={setupToken} onChange={e => setSetupToken(e.target.value)} placeholder="Copy this from your .env file" /></label><div className="login-help">On the computer running InfraWatch, open the .env file and copy the value after INITIAL_ADMIN_SETUP_TOKEN=.</div></>}<label>Administrator username<input autoComplete="username" required minLength={3} maxLength={64} value={username} onChange={e => setUsername(e.target.value)} placeholder="Choose a username" /></label><label>Administrator password<input autoComplete={setupRequired ? 'new-password' : 'current-password'} type="password" required minLength={12} value={password} onChange={e => setPassword(e.target.value)} placeholder={setupRequired ? 'Use at least 12 characters' : 'Enter your password'} /></label><button className="button button-primary login-submit" disabled={busy}>{busy ? <><LoaderCircle size={16} className="spin" /> {setupRequired ? 'Creating account…' : 'Signing in…'}</> : setupRequired ? <>Create administrator <span>→</span></> : <>Sign in <span>→</span></>}</button><div className="login-security"><ShieldCheck size={15} /> Protected with administrator authentication</div></form><div className="login-copyright">InfraWatch <span>·</span> Open source infrastructure monitoring</div></div></div>
 }
 
 function PageHeading({ eyebrow, title, subtitle, action }: { eyebrow: string; title: string; subtitle: string; action?: React.ReactNode }) { return <div className="page-heading"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{subtitle}</p></div>{action}</div> }
