@@ -21,7 +21,7 @@ InfraWatch is a self-hosted infrastructure monitoring console for Linux and Wind
 | Application metrics | FastAPI `/metrics` instrumentation, ten recording rules, and Nginx request/connection metrics from nginx-prometheus-exporter. |
 | Safe operations | SSRF-checked registration, CIDR/port allowlists, atomic file-based discovery without Prometheus restarts, no SSH or remote command execution. |
 
-**New here?** Start with the [quick start](#quick-start), then read the [beginner guide](docs/beginners-guide.md) for adding your first server.
+**New here?** Start with the [quick start](#quick-start), read [how InfraWatch works](docs/how-it-works.md) for a plain-language tour of every service, then follow the [beginner guide](docs/beginners-guide.md) to add your first server.
 
 ## Architecture
 
@@ -201,6 +201,7 @@ This is the deployed local Compose login page. The dashboard and charts require 
 
 ## Documentation
 
+- [How it works — plain-language guide](docs/how-it-works.md)
 - [Architecture](docs/architecture.md)
 - [Monitoring integrations guide](docs/integrations.md)
 - [Beginner setup guide](docs/beginners-guide.md)

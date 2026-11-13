@@ -4,6 +4,8 @@
 
 InfraWatch is intended to be a single-organization, self-hosted monitoring control plane. PostgreSQL stores application identity and inventory. Prometheus scrapes externally installed Node Exporters. The React application talks to FastAPI through Nginx. Grafana and Alertmanager consume the Prometheus data plane.
 
+For a plain-language tour of every service, see [how InfraWatch works](how-it-works.md).
+
 This document describes the implemented release-candidate design. Compose provisions the monitoring stack and reverse proxy. FastAPI, PostgreSQL, migrations, authentication, registry, audit log, SSRF-aware connectivity checks, multi-job file discovery, PromQL APIs, persisted alert transitions, integration management and endpoint monitoring are implemented. Grafana Loki and Grafana Alloy provide centralized logs. The React client and Nginx use the same-origin entry point at `http://localhost:8080`.
 
 ## Context and components
