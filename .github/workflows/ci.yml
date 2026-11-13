@@ -123,7 +123,7 @@ jobs:
         run: |
           docker compose --env-file .env -f docker/docker-compose.yml config --quiet
           docker compose --env-file .env -f docker/docker-compose.yml build backend frontend nginx
-      -         uses: aquasecurity/trivy-action@v0.36.0
+      - uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: infrawatch-backend
           format: table
@@ -131,7 +131,7 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
-      -         uses: aquasecurity/trivy-action@v0.36.0
+      - uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: infrawatch-frontend
           format: table
@@ -139,7 +139,7 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
-      -         uses: aquasecurity/trivy-action@v0.36.0
+      - uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: infrawatch-nginx
           format: table
