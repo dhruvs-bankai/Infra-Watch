@@ -28,21 +28,29 @@ InfraWatch is a self-hosted infrastructure monitoring console for Linux and Wind
 ```mermaid
 flowchart LR
     U[Operator browser] -->|localhost:8080| NG[Nginx reverse proxy]
-    NG --> FE[React + TypeScript]
-    NG --> API[FastAPI]
-    API --> DB[(PostgreSQL)]
-    API -->|atomic file update| SD[(Persistent file discovery)]
+    NG --> FE[React + TypeScript UI]
+    NG --> API[FastAPI API]
+    NG -.->|/grafana| GF[Grafana]
+    NG -.->|/alertmanager| AM[Alertmanager]
+
+    API --> DB[(PostgreSQL registry and alert history)]
+    API -->|atomic file_sd snapshots| SD[(Discovery volume)]
     SD -->|file_sd, no restart| P[Prometheus]
-    P --> NE1[User-managed Node Exporter]
-    P --> NE2[User-managed Node Exporter]
-    P --> G[Provisioned Grafana]
-    P --> AM[Alertmanager]
-    API -->|PromQL| P
-    API -->|alert history sync| AM
-    API --> AH[(PostgreSQL alert history)]
+
+    P -->|scrape| HOSTS[Node and windows exporters]
+    P -->|scrape| GUEST[cAdvisor, process and Nginx exporters]
+    P -->|/probe| BB[Blackbox Exporter]
+    BB -->|HTTP, TCP, DNS, ICMP| EXT[Websites and endpoints]
+    P -->|PromQL| API
+    P -->|metrics datasource| GF
+    P -->|recording and alert rules| AM
+
+    AL[Grafana Alloy] -->|push logs| LK[(Grafana Loki)]
+    LK -->|logs datasource| GF
+    AM -.->|optional email or Slack| NC[Notification channels]
 ```
 
-The API commits registry updates, audit entries, and an outbox event in PostgreSQL, then publishes a synchronized snapshot using a same-directory atomic replacement. A periodic reconciler repairs interrupted publication. Prometheus discovers targets from the mounted directory. See [architecture and trust boundaries](docs/architecture.md).
+The API commits registry updates, audit entries, and an outbox event in PostgreSQL, then publishes a synchronized snapshot using a same-directory atomic replacement. A periodic reconciler repairs interrupted publication. Prometheus discovers targets from the mounted directory and scrapes the exporters, the API's own `/metrics`, and Nginx request metrics. Alloy ships container, Nginx and host logs to Loki; Grafana reads both Prometheus and Loki. See [architecture and trust boundaries](docs/architecture.md).
 
 ## Stack
 

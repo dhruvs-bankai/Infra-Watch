@@ -13,6 +13,8 @@ flowchart TB
     OP[Operator] -->|HTTP :8080| NG[Nginx reverse proxy]
     NG -->|static assets| WEB[React + TypeScript]
     NG -->|/api| API[FastAPI]
+    NG -->|/grafana| GF[Grafana]
+    NG -->|/alertmanager| AM[Alertmanager]
     API -->|SQLAlchemy / migrations| PG[(PostgreSQL)]
     API -->|validated target snapshot| SD[(Persistent file discovery directory)]
     SD -->|file_sd_configs| PROM[Prometheus]
@@ -28,10 +30,11 @@ flowchart TB
     PROM -->|scrape /metrics| API
     PROM -->|scrape /metrics| NXE[nginx-prometheus-exporter]
     NXE -->|stub_status| NG
-    PROM -->|metrics datasource| GF[Grafana]
-    PROM -->|rule evaluation| AM[Alertmanager]
+    PROM -->|metrics datasource| GF
+    PROM -->|rule evaluation| AM
     API -->|15-second alert sync| AM
     API --> AH[(PostgreSQL alert events)]
+    AM -.->|optional email or Slack| NC[Notification channels]
 ```
 
 Prometheus also evaluates ten recording rules that precompute host, Windows, probe, API and Nginx series,
