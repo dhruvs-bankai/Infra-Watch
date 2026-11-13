@@ -1,5 +1,9 @@
 # InfraWatch
 
+[![InfraWatch CI](https://github.com/dhruvs-bankai/Infra-Watch/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dhruvs-bankai/Infra-Watch/actions/workflows/ci.yml)
+
+**Self-hosted infrastructure monitoring for Linux and Windows — Prometheus, Grafana, Loki and Alertmanager in one Docker Compose stack.**
+
 InfraWatch is a self-hosted infrastructure monitoring console for Linux and Windows hosts. Register hosts that run Node Exporter or windows_exporter, collect their measurements with Prometheus, inspect fleet health in a React UI, and manage alert routing through Alertmanager and Grafana.
 
 > **Release status:** v1.0.0 candidate, not yet declared production ready. The frontend, backend, Compose deployment, migrations, dynamic discovery, container/endpoint/process/Windows monitoring, centralized logs, three-target Linux integration smoke, and browser workflow are implemented. This repository's CI and hardening gates are described below. Review the [roadmap](docs/roadmap.md) for remaining evidence gaps before any production release.

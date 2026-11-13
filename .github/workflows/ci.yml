@@ -78,7 +78,10 @@ jobs:
             check config /etc/prometheus/prometheus.yml
           docker run --rm -v "$PWD/monitoring/prometheus:/etc/prometheus" \
             --entrypoint promtool prom/prometheus:v3.5.0 \
-            check rules /etc/prometheus/rules/infra-alerts.yml /etc/prometheus/rules/integration-alerts.yml \n            /etc/prometheus/rules/recording-rules.yml /etc/prometheus/rules/application-alerts.yml
+            check rules /etc/prometheus/rules/infra-alerts.yml \
+            /etc/prometheus/rules/integration-alerts.yml \
+            /etc/prometheus/rules/recording-rules.yml \
+            /etc/prometheus/rules/application-alerts.yml
       - name: Build and start the complete application
         run: docker compose --env-file .env -f docker/docker-compose.yml up -d --build --wait --wait-timeout 300
       - name: Verify real Node Exporter targets, metrics, alerts, Grafana, and persistence
@@ -120,7 +123,7 @@ jobs:
         run: |
           docker compose --env-file .env -f docker/docker-compose.yml config --quiet
           docker compose --env-file .env -f docker/docker-compose.yml build backend frontend nginx
-      - uses: aquasecurity/trivy-action@0.30.0
+      -         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: infrawatch-backend
           format: table
@@ -128,7 +131,7 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
-      - uses: aquasecurity/trivy-action@0.30.0
+      -         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: infrawatch-frontend
           format: table
@@ -136,7 +139,7 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
-      - uses: aquasecurity/trivy-action@0.30.0
+      -         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: infrawatch-nginx
           format: table
