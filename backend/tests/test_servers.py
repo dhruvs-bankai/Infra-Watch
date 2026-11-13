@@ -154,6 +154,37 @@ def test_discovery_failure_keeps_committed_change_for_reconciliation(client: Tes
         assert event.published_at is not None
 
 
+def test_windows_server_uses_windows_exporter_and_discovery(client: TestClient, auth_headers, monkeypatch, tmp_path) -> None:
+    observed: dict[str, object] = {}
+
+    async def windows_validator(host: str, port: int, _settings, **kwargs):
+        observed.update(kwargs)
+        return ValidatedTarget(host=host, port=port, address="10.20.30.60")
+
+    monkeypatch.setattr(server_routes, "validate_metrics_endpoint", windows_validator)
+    created = client.post(
+        "/api/v1/servers",
+        headers=auth_headers,
+        json={"name": "win-dc-01", "host": "10.20.30.60", "platform": "windows", "environment": "production"},
+    )
+    assert created.status_code == 201, created.text
+    server = created.json()
+    assert server["platform"] == "windows"
+    assert server["exporter_port"] == 9182
+    assert observed["markers"] == ("windows_",)
+
+    # Windows hosts are scraped by the windows job, never by the Linux Node Exporter job.
+    assert json.loads((tmp_path / "file_sd" / "servers.json").read_text(encoding="utf-8")) == []
+    windows_target = json.loads((tmp_path / "file_sd" / "windows.json").read_text(encoding="utf-8"))
+    assert windows_target[0]["targets"] == ["10.20.30.60:9182"]
+    assert windows_target[0]["labels"]["integration"] == "windows_exporter"
+
+    integrations = client.get(f"/api/v1/servers/{server['id']}/integrations", headers=auth_headers)
+    assert integrations.status_code == 200
+    assert [item["kind"] for item in integrations.json()] == ["windows_exporter"]
+    assert integrations.json()[0]["enabled"] is True
+
+
 def test_server_id_path_is_validated(client: TestClient, auth_headers):
     response = client.get("/api/v1/servers/not-a-uuid", headers=auth_headers)
     assert response.status_code == 422

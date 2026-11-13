@@ -34,6 +34,119 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  cadvisor:
+    # Host-level container metrics for the Docker engine running InfraWatch.
+    # cAdvisor requires privileged host access; it is never published to the host.
+    image: gcr.io/cadvisor/cadvisor:v0.52.1
+    restart: unless-stopped
+    privileged: true
+    read_only: true
+    command:
+      - --housekeeping_interval=15s
+      - --docker_only=true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    networks:
+      - infra
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  blackbox:
+    image: prom/blackbox-exporter:v0.27.0
+    restart: unless-stopped
+    command: ["--config.file=/etc/blackbox_exporter/config.yml"]
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+    volumes:
+      - ../monitoring/blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=8m
+    networks:
+      - infra
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9115/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  loki:
+    image: grafana/loki:3.5.1
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    read_only: true
+    volumes:
+      - ../monitoring/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    networks:
+      - infra
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3100/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  alloy:
+    # Grafana Alloy ships container, system and Nginx logs to Loki.
+    # It needs read-only access to the Docker socket to discover containers.
+    image: grafana/alloy:v1.9.1
+    restart: unless-stopped
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+    user: "0:0"
+    environment:
+      INFRAWATCH_HOST_LABEL: ${INFRAWATCH_HOST_LABEL:-infrawatch-host}
+    volumes:
+      - ../monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/log:/host/var/log:ro
+      - alloy-data:/var/lib/alloy/data
+    networks:
+      - infra
+    depends_on:
+      loki:
+        condition: service_healthy
+    healthcheck:
+      # The Alloy image has no wget/curl; bash /dev/tcp checks the ready endpoint.
+      test:
+        - CMD
+        - bash
+        - -c
+        - |
+          exec 3<>/dev/tcp/127.0.0.1/12345
+          printf 'GET /-/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3
+          read -r status <&3
+          case "$$status" in *200*) exit 0;; *) exit 1;; esac
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
   backend:
     build:
       context: ../backend
@@ -45,7 +158,7 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env}
       INITIAL_ADMIN_SETUP_TOKEN: ${INITIAL_ADMIN_SETUP_TOKEN:?Set INITIAL_ADMIN_SETUP_TOKEN in .env}
       MONITORING_ALLOWED_CIDRS: ${MONITORING_ALLOWED_CIDRS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7}
-      MONITORING_ALLOWED_PORTS: ${MONITORING_ALLOWED_PORTS:-9100}
+      MONITORING_ALLOWED_PORTS: ${MONITORING_ALLOWED_PORTS:-9100,8080,9182,9256}
       EXPORTER_CONNECT_TIMEOUT_SECONDS: ${EXPORTER_CONNECT_TIMEOUT_SECONDS:-3}
       PROMETHEUS_DISCOVERY_DIR: /var/lib/infrawatch/file_sd
       PROMETHEUS_URL: ${PROMETHEUS_URL:-http://prometheus:9090}
@@ -157,6 +270,8 @@ services:
     depends_on:
       prometheus:
         condition: service_healthy
+      loki:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/api/health"]
       interval: 30s
@@ -225,6 +340,23 @@ services:
     cap_drop:
       - ALL
 
+  nginx-exporter:
+    # Scrapes nginx stub_status on the internal web network; never published.
+    image: nginx/nginx-prometheus-exporter:1.5.0
+    restart: unless-stopped
+    command: ["--nginx.scrape-uri=http://nginx:8081/nginx_status"]
+    read_only: true
+    networks:
+      - infra
+      - web
+    depends_on:
+      nginx:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
 networks:
   infra:
     driver: bridge
@@ -237,3 +369,5 @@ volumes:
   prometheus-discovery:
   grafana-data:
   alertmanager-data:
+  loki-data:
+  alloy-data:

@@ -24,7 +24,7 @@ def client(tmp_path) -> Iterator[TestClient]:
         initial_admin_setup_token="test-initial-setup-token-that-is-long-enough-123456",
         prometheus_discovery_dir=str(tmp_path / "file_sd"),
         monitoring_allowed_cidrs="10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7",
-        monitoring_allowed_ports="9100,19100",
+        monitoring_allowed_ports="9100,19100,8080,9182,9256",
     )
     application = create_app(settings)
     Base.metadata.create_all(application.state.engine)

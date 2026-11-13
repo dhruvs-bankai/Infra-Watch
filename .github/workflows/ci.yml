@@ -68,13 +68,23 @@ jobs:
           JWT_SECRET_KEY=$(openssl rand -hex 32)
           INITIAL_ADMIN_SETUP_TOKEN=$(openssl rand -hex 32)
           MONITORING_ALLOWED_CIDRS=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7
-          MONITORING_ALLOWED_PORTS=9100
+          MONITORING_ALLOWED_PORTS=9100,8080,9182,9256
           INFRAWATCH_PUBLIC_URL=http://localhost:8080
           EOF
+      - name: Validate Prometheus configuration and alert rules
+        run: |
+          docker run --rm -v "$PWD/monitoring/prometheus:/etc/prometheus" \
+            --entrypoint promtool prom/prometheus:v3.5.0 \
+            check config /etc/prometheus/prometheus.yml
+          docker run --rm -v "$PWD/monitoring/prometheus:/etc/prometheus" \
+            --entrypoint promtool prom/prometheus:v3.5.0 \
+            check rules /etc/prometheus/rules/infra-alerts.yml /etc/prometheus/rules/integration-alerts.yml \n            /etc/prometheus/rules/recording-rules.yml /etc/prometheus/rules/application-alerts.yml
       - name: Build and start the complete application
         run: docker compose --env-file .env -f docker/docker-compose.yml up -d --build --wait --wait-timeout 300
       - name: Verify real Node Exporter targets, metrics, alerts, Grafana, and persistence
         run: python scripts/verify_backend_runtime.py
+      - name: Verify integrations, container metrics, endpoint probes and centralized logs
+        run: python scripts/verify_integrations_runtime.py
       - uses: actions/setup-node@v4
         with:
           node-version: "22.23.4"
@@ -88,7 +98,7 @@ jobs:
           npm run test:e2e:live
       - name: Show service health on failure
         if: failure()
-        run: docker compose --env-file .env -f docker/docker-compose.yml ps && docker compose --env-file .env -f docker/docker-compose.yml logs --tail=120 backend nginx frontend prometheus alertmanager
+        run: docker compose --env-file .env -f docker/docker-compose.yml ps && docker compose --env-file .env -f docker/docker-compose.yml logs --tail=120 backend nginx frontend prometheus alertmanager cadvisor blackbox loki alloy
       - name: Stop disposable stack
         if: always()
         run: docker compose --env-file .env -f docker/docker-compose.yml down --volumes

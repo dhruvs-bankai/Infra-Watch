@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 from typing import Annotated
 from uuid import UUID
 
@@ -8,12 +9,18 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.dependencies import CurrentUser, get_session
-from app.models import Server, Tag
+from app.models import Server, ServerIntegration, Tag
 from app.schemas.auth import MessageResponse
 from app.schemas.servers import ServerCreate, ServerListResponse, ServerResponse, ServerUpdate
 from app.services.audit import record_audit
 from app.services.discovery import add_registry_outbox, publish_snapshot
-from app.services.exporter import ExporterUnreachable, TargetPolicyError, validate_exporter
+from app.services.exporter import (
+    ExporterUnreachable,
+    TargetPolicyError,
+    ValidatedTarget,
+    validate_exporter,
+    validate_metrics_endpoint,
+)
 
 
 router = APIRouter(prefix="/servers", tags=["servers"])
@@ -26,6 +33,7 @@ def _response(server: Server) -> ServerResponse:
         name=server.name,
         host=server.host,
         exporter_port=server.exporter_port,
+        platform=server.platform,
         environment=server.environment,
         description=server.description,
         tags=[tag.name for tag in server.tags],
@@ -39,6 +47,22 @@ def _set_tags(session: Session, server: Server, names: list[str]) -> None:
     existing = list(session.scalars(select(Tag).where(Tag.name.in_(normalized))).all()) if normalized else []
     by_name = {tag.name: tag for tag in existing}
     server.tags = [by_name.get(name) or Tag(name=name) for name in normalized]
+
+
+async def _validate_server_endpoint(host: str, port: int, platform: str, settings) -> ValidatedTarget:
+    if platform == "windows":
+        return await validate_metrics_endpoint(
+            host, port, settings, markers=("windows_",), label="windows_exporter"
+        )
+    return await validate_exporter(host, port, settings)
+
+
+def _install_hint(platform: str) -> str:
+    return (
+        "Install windows_exporter and verify firewall access before registering."
+        if platform == "windows"
+        else "Install Node Exporter and verify firewall access before registering."
+    )
 
 
 async def _publish_or_503(request: Request, server_id: UUID) -> None:
@@ -103,17 +127,21 @@ async def create_server(
     _check_duplicate(session, name=payload.name, host=payload.host, port=payload.exporter_port)
     session.commit()
     try:
-        target = await validate_exporter(payload.host, payload.exporter_port, settings)
+        target = await _validate_server_endpoint(payload.host, payload.exporter_port, payload.platform, settings)
     except TargetPolicyError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ExporterUnreachable as exc:
-        raise HTTPException(status_code=422, detail=f"{exc}. Install Node Exporter and verify firewall access before registering.") from exc
+        raise HTTPException(
+            status_code=422,
+            detail=f"{exc}. {_install_hint(payload.platform)}",
+        ) from exc
 
     server = Server(
         name=payload.name,
         host=payload.host,
         resolved_address=target.address,
         exporter_port=payload.exporter_port,
+        platform=payload.platform,
         environment=payload.environment,
         description=payload.description,
         created_by=user.id,
@@ -124,13 +152,32 @@ async def create_server(
             session.add(server)
             _set_tags(session, server, payload.tags)
             session.flush()
+            if payload.platform == "windows":
+                session.add(
+                    ServerIntegration(
+                        server_id=server.id,
+                        kind="windows_exporter",
+                        port=server.exporter_port,
+                        metrics_path="/metrics",
+                        enabled=True,
+                        status="reachable",
+                        status_message="windows_exporter responded with expected metrics",
+                        last_checked_at=datetime.now(timezone.utc),
+                    )
+                )
             record_audit(
                 session,
                 actor_id=user.id,
                 action="server.created",
                 resource_type="server",
                 resource_id=str(server.id),
-                details={"name": server.name, "host": server.host, "port": server.exporter_port, "environment": server.environment},
+                details={
+                    "name": server.name,
+                    "host": server.host,
+                    "port": server.exporter_port,
+                    "platform": server.platform,
+                    "environment": server.environment,
+                },
                 request_id=request.state.request_id,
             )
             add_registry_outbox(session, "server.created", str(server.id))
@@ -177,12 +224,17 @@ async def update_server(
         if next_port not in request.app.state.settings.allowed_ports:
             raise HTTPException(status_code=422, detail=f"Port {next_port} is not allowed by monitoring policy")
         try:
-            target = await validate_exporter(next_host, next_port, request.app.state.settings)
+            target = await _validate_server_endpoint(
+                next_host, next_port, server.platform, request.app.state.settings
+            )
             validated_address = target.address
         except TargetPolicyError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except ExporterUnreachable as exc:
-            raise HTTPException(status_code=422, detail=f"{exc}. Install Node Exporter and verify firewall access before updating.") from exc
+            raise HTTPException(
+                status_code=422,
+                detail=f"{exc}. {_install_hint(server.platform)} Replace 'registering' with 'updating'.",
+            ) from exc
 
     try:
         with session.begin():
@@ -190,7 +242,13 @@ async def update_server(
             if server is None:
                 raise HTTPException(status_code=404, detail="Server not found")
             _check_duplicate(session, name=next_name, host=next_host, port=next_port, exclude=server.id)
-            previous = {"name": server.name, "host": server.host, "port": server.exporter_port, "environment": server.environment}
+            previous = {
+                "name": server.name,
+                "host": server.host,
+                "port": server.exporter_port,
+                "platform": server.platform,
+                "environment": server.environment,
+            }
             for field in ("name", "host", "exporter_port", "environment", "description"):
                 if field in changes:
                     setattr(server, field, changes[field])

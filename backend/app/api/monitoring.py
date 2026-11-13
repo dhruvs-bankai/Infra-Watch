@@ -161,6 +161,57 @@ def server_metrics(
     return {"server_id": str(server.id), "server_name": server.name, "metric": metric, "unit": unit, "points": series}
 
 
+@router.get("/metrics/containers")
+def containers(
+    request: Request,
+    user: CurrentUser,
+    session: SessionDep,
+    server_id: Annotated[UUID | None, Query()] = None,
+):
+    """Live container inventory and resource use from cAdvisor."""
+
+    selector = f'server_id="{server_id}",' if server_id else ""
+    base = f'{{job="cadvisor",{selector}name!=""}}'
+    queries = {
+        "cpu": f'sum by (server_id, name) (rate(container_cpu_usage_seconds_total{base}[5m])) * 100',
+        "memory": f'sum by (server_id, name) (container_memory_working_set_bytes{base})',
+        "limit": f'max by (server_id, name) (container_spec_memory_limit_bytes{base})',
+        "filesystem": f'sum by (server_id, name) (container_fs_usage_bytes{base})',
+        "network_in": f'sum by (server_id, name) (rate(container_network_receive_bytes_total{base}[5m]))',
+        "network_out": f'sum by (server_id, name) (rate(container_network_transmit_bytes_total{base}[5m]))',
+        "restarts": f'changes(container_start_time_seconds{base}[1h])',
+        "image": f'max by (server_id, name, image) (container_last_seen{base})',
+    }
+    rows = {key: _query(request, expression) for key, expression in queries.items()}
+    containers_by_key: dict[tuple[str, str], dict] = {}
+    for key, results in rows.items():
+        for row in results:
+            metric = row.get("metric", {})
+            name = metric.get("name")
+            owner = metric.get("server_id", "")
+            if not name:
+                continue
+            entry = containers_by_key.setdefault((owner, name), {"server_id": owner, "name": name})
+            if key == "image":
+                entry["image"] = metric.get("image", "")
+                continue
+            try:
+                value = float(row["value"][1])
+            except (KeyError, TypeError, ValueError, IndexError):
+                continue
+            if math.isfinite(value):
+                entry[key] = value
+    items = sorted(containers_by_key.values(), key=lambda item: item.get("cpu", 0), reverse=True)[:100]
+    names = {str(server.id): server.name for server in session.scalars(select(Server)).all()}
+    for item in items:
+        item["server_name"] = names.get(item["server_id"], "") or "Unassigned"
+    return {
+        "total_containers": len(containers_by_key),
+        "items": items,
+        "as_of": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 @router.get("/alerts")
 def alerts(user: CurrentUser, session: SessionDep):
     events = session.scalars(select(AlertEvent).order_by(AlertEvent.started_at.desc()).limit(200)).all()

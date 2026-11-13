@@ -1,16 +1,18 @@
 import asyncio
 import logging
 import re
+import time
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from app.api import auth, monitoring, servers
+from app.api import auth, integrations, monitoring, servers
+from app.core import metrics
 from app.core.config import Settings, get_settings
 from app.core.database import create_database
 from app.services.discovery import has_pending_events, publish_snapshot
@@ -29,6 +31,9 @@ def create_app(settings: Settings | None = None, *, database_url: str | None = N
     async def reconcile_discovery() -> None:
         try:
             await asyncio.to_thread(publish_snapshot, factory, app_settings.prometheus_discovery_dir)
+            await asyncio.to_thread(
+                metrics.refresh_inventory_metrics, factory, app_settings.prometheus_discovery_dir
+            )
         except Exception:
             logger.exception("Initial Prometheus discovery reconciliation failed; it will retry")
         while True:
@@ -44,6 +49,12 @@ def create_app(settings: Settings | None = None, *, database_url: str | None = N
                 await asyncio.to_thread(collect_alert_history, factory, app_settings.alertmanager_url)
             except Exception:
                 logger.exception("Alert history collection failed; it will retry")
+            try:
+                await asyncio.to_thread(
+                    metrics.refresh_inventory_metrics, factory, app_settings.prometheus_discovery_dir
+                )
+            except Exception:
+                logger.exception("Application metric refresh failed; it will retry")
 
     @asynccontextmanager
     async def lifespan(_application: FastAPI):
@@ -64,6 +75,7 @@ def create_app(settings: Settings | None = None, *, database_url: str | None = N
     application.state.session_factory = factory
     application.state.engine = engine
     application.state.logger = logger
+    metrics.BUILD_INFO.labels(version=application.version).set(1)
 
     origins = app_settings.cors_origin_list
     if origins:
@@ -81,12 +93,28 @@ def create_app(settings: Settings | None = None, *, database_url: str | None = N
         supplied = request.headers.get("x-request-id", "")
         request_id = supplied if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", supplied) else str(uuid4())
         request.state.request_id = request_id
-        response = await call_next(request)
+        started = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            route = request.scope.get("route")
+            metrics.observe_request(
+                request.method, getattr(route, "path", None) or "unmatched", 500, time.perf_counter() - started
+            )
+            raise
         response.headers["X-Request-ID"] = request_id
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Cache-Control"] = "no-store"
+        if request.url.path != "/metrics":
+            route = request.scope.get("route")
+            metrics.observe_request(
+                request.method,
+                getattr(route, "path", None) or "unmatched",
+                response.status_code,
+                time.perf_counter() - started,
+            )
         return response
 
     @application.exception_handler(Exception)
@@ -104,9 +132,15 @@ def create_app(settings: Settings | None = None, *, database_url: str | None = N
             session.execute(text("SELECT 1"))
         return {"status": "ready"}
 
+    @application.get("/metrics", include_in_schema=False)
+    def prometheus_metrics():
+        body, content_type = metrics.render_metrics()
+        return Response(content=body, media_type=content_type)
+
     application.include_router(auth.router, prefix="/api/v1")
     application.include_router(servers.router, prefix="/api/v1")
     application.include_router(monitoring.router, prefix="/api/v1")
+    application.include_router(integrations.router, prefix="/api/v1")
     return application
 
 

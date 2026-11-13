@@ -1,0 +1,116 @@
+// Grafana Alloy log collection for InfraWatch.
+// Ships Docker container logs (including the bundled Nginx access/error logs)
+// and host system/application logs to Loki with host and service labels.
+
+logging {
+  level  = "warn"
+  format = "logfmt"
+}
+
+// ---------------------------------------------------------------- Docker logs
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "compose_project"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "job"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.containers.output
+  labels     = { host = env("INFRAWATCH_HOST_LABEL"), source = "docker" }
+  forward_to = [loki.process.pipeline.receiver]
+}
+
+// ------------------------------------------------------- Host system and app logs
+local.file_match "system" {
+  path_targets = [
+    {
+      __path__ = "/host/var/log/syslog",
+      job      = "system",
+      service  = "syslog",
+      host     = env("INFRAWATCH_HOST_LABEL"),
+      source   = "file",
+    },
+    {
+      __path__ = "/host/var/log/auth.log",
+      job      = "system",
+      service  = "auth",
+      host     = env("INFRAWATCH_HOST_LABEL"),
+      source   = "file",
+    },
+    {
+      __path__ = "/host/var/log/messages",
+      job      = "system",
+      service  = "messages",
+      host     = env("INFRAWATCH_HOST_LABEL"),
+      source   = "file",
+    },
+    {
+      __path__ = "/host/var/log/nginx/*.log",
+      job      = "nginx",
+      service  = "nginx",
+      host     = env("INFRAWATCH_HOST_LABEL"),
+      source   = "file",
+    },
+    {
+      __path__ = "/host/var/log/infrawatch/*.log",
+      job      = "application",
+      service  = "infrawatch",
+      host     = env("INFRAWATCH_HOST_LABEL"),
+      source   = "file",
+    },
+  ]
+}
+
+loki.source.file "system" {
+  targets    = local.file_match.system.targets
+  forward_to = [loki.process.pipeline.receiver]
+}
+
+// ------------------------------------------------------------- Shared processing
+loki.process "pipeline" {
+  // Extract a severity label from common syslog, JSON and application formats.
+  stage.regex {
+    expression = `(?i)(?P<level>emerg|alert|crit|fatal|error|warn(?:ing)?|notice|info|debug|trace)`
+  }
+
+  stage.labels {
+    values = { level = "level" }
+  }
+
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+
+  external_labels = {
+    collector = "alloy",
+    host      = env("INFRAWATCH_HOST_LABEL"),
+  }
+}

@@ -45,6 +45,7 @@ class Server(Base):
     host: Mapped[str] = mapped_column(String(253))
     resolved_address: Mapped[str] = mapped_column(String(45))
     exporter_port: Mapped[int] = mapped_column(Integer, default=9100)
+    platform: Mapped[str] = mapped_column(String(10), default="linux", nullable=False)
     environment: Mapped[str] = mapped_column(String(20), default="production", index=True)
     description: Mapped[str] = mapped_column(String(1000), default="")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -53,6 +54,64 @@ class Server(Base):
     created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
 
     tags: Mapped[list[Tag]] = relationship(secondary=server_tags, back_populates="servers", lazy="selectin")
+    integrations: Mapped[list[ServerIntegration]] = relationship(
+        back_populates="server", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+
+class ServerIntegration(Base):
+    """An exporter attached to a registered server.
+
+    Only endpoint metadata is stored; no credentials are accepted or persisted.
+    """
+
+    __tablename__ = "server_integrations"
+    __table_args__ = (UniqueConstraint("server_id", "kind", name="uq_server_integration_kind"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    server_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("servers.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    port: Mapped[int] = mapped_column(Integer, nullable=False)
+    metrics_path: Mapped[str] = mapped_column(String(200), default="/metrics", nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="unknown", nullable=False)
+    status_message: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    server: Mapped[Server] = relationship(back_populates="integrations")
+
+
+class EndpointMonitor(Base):
+    """A blackbox probe target (HTTP, HTTPS, TCP, DNS or ICMP)."""
+
+    __tablename__ = "endpoint_monitors"
+    __table_args__ = (
+        UniqueConstraint("kind", "target", "port", name="uq_endpoint_monitor_target"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    kind: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    target: Mapped[str] = mapped_column(String(2048), nullable=False)
+    port: Mapped[int | None] = mapped_column(Integer)
+    path: Mapped[str] = mapped_column(String(200), default="/", nullable=False)
+    expected_status: Mapped[int] = mapped_column(Integer, default=200, nullable=False)
+    interval_seconds: Mapped[int] = mapped_column(Integer, default=30, nullable=False)
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    environment: Mapped[str] = mapped_column(String(20), default="production", nullable=False)
+    description: Mapped[str] = mapped_column(String(1000), default="", nullable=False)
+    server_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("servers.id", ondelete="SET NULL")
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    server: Mapped[Server | None] = relationship()
 
 
 class Tag(Base):

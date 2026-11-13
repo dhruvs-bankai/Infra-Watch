@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     monitoring_allowed_cidrs: str = (
         "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7"
     )
-    monitoring_allowed_ports: str = "9100"
+    monitoring_allowed_ports: str = "9100,8080,9182,9256"
     exporter_connect_timeout_seconds: float = Field(default=3.0, ge=0.2, le=15)
     exporter_response_limit_bytes: int = Field(default=8_388_608, ge=1024)
     prometheus_discovery_dir: str = "/var/lib/infrawatch/file_sd"

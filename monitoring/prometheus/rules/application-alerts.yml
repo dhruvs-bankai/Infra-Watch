@@ -1,0 +1,52 @@
+groups:
+  - name: application-alerts
+    rules:
+      - alert: InfraWatchApiDown
+        expr: up{job="infrawatch"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: infrawatch-api
+        annotations:
+          summary: "InfraWatch API is not responding to Prometheus"
+          description: "The API has been unreachable from Prometheus for more than 2 minutes; the UI and discovery publisher are likely unavailable."
+
+      - alert: InfraWatchApiHighErrorRate
+        expr: job:infrawatch_http_error_ratio5m > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          service: infrawatch-api
+        annotations:
+          summary: "InfraWatch API 5xx error rate is above 5%"
+          description: "More than 5% of API responses have failed with a 5xx status for 10 minutes (current: {{ $value | humanizePercentage }})."
+
+      - alert: InfraWatchApiSlowRequests
+        expr: job:infrawatch_http_latency_p95_5m > 2
+        for: 10m
+        labels:
+          severity: warning
+          service: infrawatch-api
+        annotations:
+          summary: "InfraWatch API p95 latency is above 2 seconds"
+          description: "95th percentile request latency has exceeded 2 seconds for 10 minutes (current: {{ $value | humanizeDuration }})."
+
+      - alert: InfraWatchDiscoveryStale
+        expr: max(infrawatch_discovery_file_age_seconds) > 300
+        for: 10m
+        labels:
+          severity: warning
+          service: infrawatch-discovery
+        annotations:
+          summary: "Prometheus file_sd snapshot has not been refreshed"
+          description: "The oldest discovery snapshot is older than 5 minutes; registry changes may not be scraped."
+
+      - alert: NginxExporterDown
+        expr: up{job="nginx"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          service: nginx
+        annotations:
+          summary: "Nginx metrics are unavailable"
+          description: "Prometheus cannot scrape nginx-prometheus-exporter, so request and connection panels will be empty."

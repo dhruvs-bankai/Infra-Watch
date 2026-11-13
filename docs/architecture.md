@@ -4,7 +4,7 @@
 
 InfraWatch is intended to be a single-organization, self-hosted monitoring control plane. PostgreSQL stores application identity and inventory. Prometheus scrapes externally installed Node Exporters. The React application talks to FastAPI through Nginx. Grafana and Alertmanager consume the Prometheus data plane.
 
-This document describes the implemented release-candidate design. Compose provisions the monitoring stack and reverse proxy. FastAPI, PostgreSQL, migrations, authentication, registry, audit log, SSRF-aware connectivity checks, file discovery, PromQL APIs, and persisted alert transitions are implemented. The React client and Nginx use the same-origin entry point at `http://localhost:8080`.
+This document describes the implemented release-candidate design. Compose provisions the monitoring stack and reverse proxy. FastAPI, PostgreSQL, migrations, authentication, registry, audit log, SSRF-aware connectivity checks, multi-job file discovery, PromQL APIs, persisted alert transitions, integration management and endpoint monitoring are implemented. Grafana Loki and Grafana Alloy provide centralized logs. The React client and Nginx use the same-origin entry point at `http://localhost:8080`.
 
 ## Context and components
 
@@ -17,12 +17,27 @@ flowchart TB
     API -->|validated target snapshot| SD[(Persistent file discovery directory)]
     SD -->|file_sd_configs| PROM[Prometheus]
     PROM -->|scrape TCP/9100| NE[Node Exporter on user-managed Linux hosts]
+    PROM -->|scrape /metrics| CAD[cAdvisor on Docker hosts]
+    PROM -->|scrape /metrics| PX[process-exporter on Linux hosts]
+    PROM -->|scrape /metrics| WX[windows_exporter on Windows hosts]
+    PROM -->|/probe| BB[Blackbox Exporter]
+    BB -->|HTTP, TCP, DNS, ICMP| EXT[External endpoints]
+    ALLOY[Grafana Alloy] -->|push logs| LOKI[(Grafana Loki)]
+    LOKI -->|logs datasource| GF
     PROM -->|PromQL| API
+    PROM -->|scrape /metrics| API
+    PROM -->|scrape /metrics| NXE[nginx-prometheus-exporter]
+    NXE -->|stub_status| NG
     PROM -->|metrics datasource| GF[Grafana]
     PROM -->|rule evaluation| AM[Alertmanager]
     API -->|15-second alert sync| AM
     API --> AH[(PostgreSQL alert events)]
 ```
+
+Prometheus also evaluates ten recording rules that precompute host, Windows, probe, API and Nginx series,
+so dashboards query stable aggregates instead of recomputing rates in every panel. The API's own
+`/metrics` endpoint is scraped as job `infrawatch`, and `nginx-prometheus-exporter` exposes Nginx request
+and connection counters as job `nginx`.
 
 ## Registration and discovery flow
 
@@ -34,7 +49,40 @@ flowchart TB
 6. Prometheus observes the file change through `file_sd_configs` and begins scraping without a process restart.
 7. The dashboard derives live availability and measurements from Prometheus; registry status and scrape status remain distinct concepts.
 
-Removal follows the same snapshot publication process. Failure between database commit and publication requires durable reconciliation (for example, a retryable outbox or startup rebuild); this behavior is a release requirement.
+Removal follows the same snapshot publication process. A durable outbox plus a periodic reconciler repairs any publication that fails after the database commit.
+
+## Integration and endpoint discovery
+
+The same publisher writes a separate file per scrape job, so adding one integration cannot corrupt or
+replace another job's targets:
+
+| File | Job | Producers |
+| --- | --- | --- |
+| `servers.json` | `node` | Linux servers (Node Exporter) |
+| `cadvisor.json` | `cadvisor` | cAdvisor integrations |
+| `process.json` | `process` | process-exporter integrations |
+| `windows.json` | `windows` | windows_exporter integrations and Windows platform servers |
+| `probes-http.json` | `blackbox-http` | HTTP and HTTPS endpoint monitors |
+| `probes-tcp.json` | `blackbox-tcp` | TCP endpoint monitors |
+| `probes-dns.json` | `blackbox-dns` | DNS endpoint monitors |
+| `probes-icmp.json` | `blackbox-icmp` | ICMP endpoint monitors |
+
+All eight files are rewritten atomically on every publication. Disabled integrations and endpoints are
+omitted, so removing a target requires no Prometheus restart. Because each job has its own file, an
+unavailable cAdvisor or Windows exporter never affects Linux Node Exporter scrapes.
+
+Windows hosts are a distinct platform: registration validates windows_exporter and creates its
+integration, and the host is excluded from the Linux `node` job. Integration endpoints are attached to
+their server's validated address, so a host runs one family of exporters per job.
+
+## Log pipeline
+
+Grafana Alloy discovers Docker containers through the read-only Docker socket, tails host log files from a
+read-only `/var/log` mount, extracts a severity label, and pushes streams to Loki with `host`, `service`,
+`container` and `source` labels. Alloy sets `host` from `INFRAWATCH_HOST_LABEL`, which is how logs are
+associated with server identity. Loki stores data on a persistent volume for seven days by default. Loki
+is not published to the host and has no built-in authentication in this configuration; Grafana queries it
+over the private network.
 
 ## Network and trust boundaries
 
@@ -50,7 +98,7 @@ An application-level IP check alone does not prevent DNS rebinding or routing to
 
 ## Data ownership
 
-PostgreSQL is authoritative for users, servers, tags, alert thresholds, settings, audit events, discovery outbox events, and alert event transitions. Prometheus owns time-series history. Grafana dashboards are provisioned from repository files. Alertmanager handles routing and current alert state; the API polls and stores firing/resolution transitions in PostgreSQL.
+PostgreSQL is authoritative for users, servers, tags, platform, monitoring integrations, endpoint monitors, alert thresholds, settings, audit events, discovery outbox events, and alert event transitions. Prometheus owns time-series history. Grafana dashboards, datasources and the Loki configuration are provisioned from repository files. Alertmanager handles routing and current alert state; the API polls and stores firing/resolution transitions in PostgreSQL. Loki owns log storage.
 
 All stored timestamps use UTC. Password hashes only are stored. Do not persist exporter credentials; Node Exporter is expected to be protected by network boundaries unless a later authenticated exporter design is added.
 
@@ -89,6 +137,11 @@ flowchart LR
       SD --> PR[Prometheus]
       PR --> GA[Grafana]
       PR --> AL[Alertmanager]
+      BB[Blackbox Exporter] --> PR
+      GA --> LK[(Loki volume)]
+      AL2[Alloy] --> LK
     end
-    PR -->|approved scrape egress| HOSTS[Linux hosts with manually installed Node Exporter]
+    PR -->|approved scrape egress| HOSTS[Linux, Windows and Docker hosts with operator-installed exporters]
+    PR -->|probes| EXT[External endpoints]
+    AL2 -->|read-only| DOCKER[Docker socket and host logs]
 ```

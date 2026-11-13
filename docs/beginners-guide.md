@@ -110,3 +110,11 @@ docker compose up -d              # Start again
 - **Want to start fresh:** deleting Compose volumes permanently deletes saved users, servers, alert history, and metrics. Make a backup first.
 
 For network design, secrets, and production limitations, read the [security guide](security.md). For services and environment variables, read [configuration](configuration.md).
+
+## Want containers, websites, Windows hosts, or logs too?
+
+InfraWatch can also monitor Docker containers, websites and APIs, TCP ports, DNS names, individual
+processes, Windows servers, and centralized logs. Everything is optional and installed by you on the
+machine you want to watch. Start with the plain-language
+[monitoring integrations guide](integrations.md); it follows the same three steps for every integration:
+install the exporter, open the port only to InfraWatch, then attach it in the UI.

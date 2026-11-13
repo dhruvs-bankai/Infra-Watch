@@ -17,9 +17,127 @@ scrape_configs:
     static_configs:
       - targets: ["prometheus:9090"]
 
+  # InfraWatch API instrumentation (custom application metrics).
+  - job_name: infrawatch
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["backend:8000"]
+
+  # Nginx request/connection metrics via nginx-prometheus-exporter.
+  - job_name: nginx
+    static_configs:
+      - targets: ["nginx-exporter:9113"]
+
+  # Registered Linux servers (Node Exporter). File-based discovery is written
+  # atomically by the API; no Prometheus restart is required for changes.
   - job_name: node
     honor_labels: false
     file_sd_configs:
       - files:
-          - /etc/prometheus/file_sd/*.json
+          - /etc/prometheus/file_sd/servers.json
         refresh_interval: 30s
+
+  - job_name: cadvisor
+    scrape_interval: 15s
+    file_sd_configs:
+      - files:
+          - /etc/prometheus/file_sd/cadvisor.json
+        refresh_interval: 30s
+    relabel_configs:
+      - source_labels: [metrics_path]
+        regex: (.+)
+        target_label: __metrics_path__
+
+  - job_name: process
+    file_sd_configs:
+      - files:
+          - /etc/prometheus/file_sd/process.json
+        refresh_interval: 30s
+    relabel_configs:
+      - source_labels: [metrics_path]
+        regex: (.+)
+        target_label: __metrics_path__
+
+  - job_name: windows
+    file_sd_configs:
+      - files:
+          - /etc/prometheus/file_sd/windows.json
+        refresh_interval: 30s
+    relabel_configs:
+      - source_labels: [metrics_path]
+        regex: (.+)
+        target_label: __metrics_path__
+
+  # Blackbox probing. The probe target is carried in __param_target and the
+  # blackbox exporter itself is the scrape address.
+  - job_name: blackbox-http
+    metrics_path: /probe
+    scrape_interval: 30s
+    scrape_timeout: 15s
+    params:
+      module: [http_2xx]
+    file_sd_configs:
+      - files:
+          - /etc/prometheus/file_sd/probes-http.json
+        refresh_interval: 30s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: target
+      - target_label: __address__
+        replacement: blackbox:9115
+
+  - job_name: blackbox-tcp
+    metrics_path: /probe
+    scrape_interval: 30s
+    scrape_timeout: 15s
+    params:
+      module: [tcp_connect]
+    file_sd_configs:
+      - files:
+          - /etc/prometheus/file_sd/probes-tcp.json
+        refresh_interval: 30s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: target
+      - target_label: __address__
+        replacement: blackbox:9115
+
+  - job_name: blackbox-dns
+    metrics_path: /probe
+    scrape_interval: 30s
+    scrape_timeout: 15s
+    params:
+      module: [dns_udp]
+    file_sd_configs:
+      - files:
+          - /etc/prometheus/file_sd/probes-dns.json
+        refresh_interval: 30s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: target
+      - target_label: __address__
+        replacement: blackbox:9115
+
+  - job_name: blackbox-icmp
+    metrics_path: /probe
+    scrape_interval: 30s
+    scrape_timeout: 15s
+    params:
+      module: [icmp]
+    file_sd_configs:
+      - files:
+          - /etc/prometheus/file_sd/probes-icmp.json
+        refresh_interval: 30s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: target
+      - target_label: __address__
+        replacement: blackbox:9115

@@ -1,5 +1,5 @@
 export type User = { id: string; username: string; is_admin: boolean }
-export type Server = { id: string; name: string; host: string; exporter_port: number; environment: string; description: string; tags: string[]; created_at: string; updated_at: string }
+export type Server = { id: string; name: string; host: string; exporter_port: number; platform: string; environment: string; description: string; tags: string[]; created_at: string; updated_at: string }
 export type ServerList = { items: Server[]; total: number }
 export type MetricPoint = { timestamp: string; value: number }
 export type MetricName = 'cpu' | 'cpu_idle' | 'cpu_system' | 'cpu_user' | 'memory' | 'memory_total' | 'memory_used' | 'memory_available' | 'disk' | 'disk_total' | 'disk_used' | 'disk_free' | 'disk_read' | 'disk_write' | 'network_in' | 'network_out' | 'network_packets_in' | 'network_packets_out' | 'network_errors' | 'load' | 'load1' | 'load5' | 'load15' | 'uptime'

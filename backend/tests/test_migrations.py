@@ -28,7 +28,16 @@ def test_initial_alembic_migration_creates_schema(tmp_path):
 
     with sqlite3.connect(database) as connection:
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert {"users", "servers", "tags", "audit_logs", "app_settings", "outbox_events"}.issubset(tables)
+        assert {
+            "users",
+            "servers",
+            "tags",
+            "audit_logs",
+            "app_settings",
+            "outbox_events",
+            "server_integrations",
+            "endpoint_monitors",
+        }.issubset(tables)
         setup_value = connection.execute(
             "SELECT value FROM app_settings WHERE key = 'initial_admin_setup_complete'"
         ).fetchone()[0]

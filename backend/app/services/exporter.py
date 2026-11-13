@@ -47,6 +47,29 @@ def _approved_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address, se
     return any(address.version == network.version and address in network for network in allowed)
 
 
+def _probe_address_approved(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address, settings: Settings
+) -> bool:
+    """Public addresses and explicitly allowlisted private networks only."""
+
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    if address.is_loopback or address.is_link_local or address.is_multicast or address.is_unspecified or address.is_reserved:
+        return False
+    if any(address.version == network.version and address in network for network in _DENIED_NETWORKS):
+        return False
+    if address.is_global:
+        return True
+    try:
+        allowed = [ipaddress.ip_network(value, strict=False) for value in settings.allowed_cidrs]
+    except ValueError as exc:
+        raise TargetPolicyError("Monitoring network policy contains an invalid CIDR") from exc
+    return any(
+        address.version == network.version and address in network and address.is_private
+        for network in allowed
+    )
+
+
 async def _resolve(host: str, port: int, timeout: float) -> list[str]:
     try:
         records = await asyncio.wait_for(
@@ -66,16 +89,29 @@ def _url_host(address: str) -> str:
     return f"[{parsed.compressed}]" if parsed.version == 6 else parsed.compressed
 
 
-async def validate_exporter(host: str, port: int, settings: Settings) -> ValidatedTarget:
+async def _addresses_for(host: str, port: int, settings: Settings) -> list[str]:
+    try:
+        literal = ipaddress.ip_address(host)
+        return [literal.compressed]
+    except ValueError:
+        return await _resolve(host, port, settings.exporter_connect_timeout_seconds)
+
+
+async def validate_metrics_endpoint(
+    host: str,
+    port: int,
+    settings: Settings,
+    *,
+    path: str = "/metrics",
+    markers: tuple[str, ...] = ("node_",),
+    label: str = "Node Exporter",
+) -> ValidatedTarget:
+    """Validate a private metrics endpoint without following redirects or using proxies."""
+
     if port not in settings.allowed_ports:
         raise TargetPolicyError(f"Port {port} is not in MONITORING_ALLOWED_PORTS")
 
-    try:
-        literal = ipaddress.ip_address(host)
-        addresses = [literal.compressed]
-    except ValueError:
-        addresses = await _resolve(host, port, settings.exporter_connect_timeout_seconds)
-
+    addresses = await _addresses_for(host, port, settings)
     parsed = [ipaddress.ip_address(address) for address in addresses]
     # Reject mixed DNS answers as well: a future resolver choice must not escape the policy.
     if any(not _approved_address(address, settings) for address in parsed):
@@ -85,11 +121,15 @@ async def validate_exporter(host: str, port: int, settings: Settings) -> Validat
     timeout = httpx.Timeout(settings.exporter_connect_timeout_seconds)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False) as client:
         for address in addresses:
-            target_url = f"http://{_url_host(address)}:{port}/metrics"
+            target_url = f"http://{_url_host(address)}:{port}{path}"
             authority_host = f"[{host}]" if ":" in host else host
             authority = f"{authority_host}:{port}"
             try:
-                async with client.stream("GET", target_url, headers={"Host": authority, "Accept": "text/plain, application/openmetrics-text"}) as response:
+                async with client.stream(
+                    "GET",
+                    target_url,
+                    headers={"Host": authority, "Accept": "text/plain, application/openmetrics-text"},
+                ) as response:
                     if response.status_code != 200:
                         failures.append(f"HTTP {response.status_code}")
                         continue
@@ -98,20 +138,54 @@ async def validate_exporter(host: str, port: int, settings: Settings) -> Validat
                         failures.append("endpoint did not return a Prometheus text metrics content type")
                         continue
                     total = 0
-                    has_node_metric = False
+                    markers_found = {marker: False for marker in markers}
                     async for chunk in response.aiter_bytes():
                         total += len(chunk)
                         if total > settings.exporter_response_limit_bytes:
                             failures.append("metrics response exceeded the configured size limit")
                             break
-                        if b"node_" in chunk:
-                            has_node_metric = True
+                        for marker in markers_found:
+                            if marker.encode() in chunk:
+                                markers_found[marker] = True
                     else:
-                        if has_node_metric:
+                        if not markers_found or all(markers_found.values()):
                             return ValidatedTarget(host=host, port=port, address=address)
-                        failures.append("endpoint did not expose Node Exporter metrics")
+                        failures.append(f"endpoint did not expose {label} metrics")
             except httpx.HTTPError:
                 failures.append("connection failed")
 
     reason = failures[0] if failures else "connection failed"
-    raise ExporterUnreachable(f"Could not validate Node Exporter at {host}:{port}: {reason}")
+    raise ExporterUnreachable(f"Could not validate {label} at {host}:{port}: {reason}")
+
+
+async def validate_exporter(host: str, port: int, settings: Settings) -> ValidatedTarget:
+    return await validate_metrics_endpoint(host, port, settings)
+
+
+async def validate_probe_target(
+    kind: str,
+    host: str,
+    settings: Settings,
+    *,
+    require_resolution: bool = True,
+) -> str | None:
+    """Apply the SSRF policy for a blackbox probe target.
+
+    External HTTP/TCP checks may reach public addresses and private networks that
+    the operator explicitly allowlisted. Loopback, link-local, metadata and other
+    non-global ranges are always rejected.
+    """
+
+    port = 443 if kind == "https" else 80
+    try:
+        addresses = await _addresses_for(host, port, settings)
+    except ExporterUnreachable:
+        if require_resolution:
+            raise
+        return None
+    parsed = [ipaddress.ip_address(address) for address in addresses]
+    if any(not _probe_address_approved(address, settings) for address in parsed):
+        raise TargetPolicyError(
+            "The probe target resolves to an address outside the approved monitoring networks"
+        )
+    return parsed[0].compressed

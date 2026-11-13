@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 Environment = Literal["production", "staging", "development"]
+Platform = Literal["linux", "windows"]
 _TAG = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,39}$")
 
 
@@ -45,6 +46,7 @@ class ServerCreate(BaseModel):
     name: str = Field(min_length=2, max_length=100)
     host: str = Field(min_length=1, max_length=253)
     exporter_port: int = Field(default=9100, ge=1, le=65535)
+    platform: Platform = "linux"
     environment: Environment = "production"
     description: str = Field(default="", max_length=1000)
     tags: list[str] = Field(default_factory=list, max_length=20)
@@ -66,6 +68,12 @@ class ServerCreate(BaseModel):
     @classmethod
     def clean_description(cls, value: str) -> str:
         return value.strip()
+
+    @model_validator(mode="after")
+    def default_windows_port(self):
+        if self.platform == "windows" and "exporter_port" not in self.model_fields_set:
+            object.__setattr__(self, "exporter_port", 9182)
+        return self
 
     @field_validator("tags")
     @classmethod
@@ -128,6 +136,7 @@ class ServerResponse(BaseModel):
     name: str
     host: str
     exporter_port: int
+    platform: str
     environment: str
     description: str
     tags: list[str]

@@ -1,0 +1,231 @@
+groups:
+  - name: infrawatch-container-alerts
+    interval: 30s
+    rules:
+      - alert: CAdvisorUnavailable
+        expr: up{job="cadvisor"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          category: containers
+        annotations:
+          summary: "cAdvisor is unavailable on {{ $labels.instance }}"
+          description: "Container metrics have not been scraped for 5 minutes. Check that cAdvisor is running and reachable on the private monitoring network."
+
+      - alert: ContainerCPUUsageHigh
+        expr: sum by (instance, server_id, name) (rate(container_cpu_usage_seconds_total{job="cadvisor",name!=""}[5m])) * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+          category: containers
+        annotations:
+          summary: "Container {{ $labels.name }} CPU usage is above 85% on {{ $labels.instance }}"
+          description: "Container CPU usage has remained above 85% for 10 minutes (current value {{ $value | printf \"%.1f\" }}%). Check the container limit and application load."
+
+      - alert: ContainerMemoryNearLimit
+        expr: |
+          (
+            container_memory_working_set_bytes{job="cadvisor",name!=""}
+            /
+            container_spec_memory_limit_bytes{job="cadvisor",name!=""} > 0.9
+          )
+          and on (instance, server_id, name)
+          container_spec_memory_limit_bytes{job="cadvisor",name!=""} > 0
+        for: 10m
+        labels:
+          severity: warning
+          category: containers
+        annotations:
+          summary: "Container {{ $labels.name }} is near its memory limit on {{ $labels.instance }}"
+          description: "Working set memory has exceeded 90% of the configured container limit for 10 minutes. Expect OOM kills if usage keeps growing."
+
+      - alert: ContainerFilesystemUsageHigh
+        expr: |
+          (
+            sum by (instance, server_id, name) (container_fs_usage_bytes{job="cadvisor",name!=""})
+            /
+            sum by (instance, server_id, name) (container_fs_limit_bytes{job="cadvisor",name!=""}) > 0.9
+          )
+          and on (instance, server_id, name)
+          sum by (instance, server_id, name) (container_fs_limit_bytes{job="cadvisor",name!=""}) > 0
+        for: 10m
+        labels:
+          severity: warning
+          category: containers
+        annotations:
+          summary: "Container {{ $labels.name }} filesystem usage is above 90% on {{ $labels.instance }}"
+          description: "Writable layer usage has exceeded 90% of its limit for 10 minutes."
+
+      - alert: ContainerRestartingFrequently
+        expr: changes(container_start_time_seconds{job="cadvisor",name!=""}[1h]) > 3
+        for: 5m
+        labels:
+          severity: warning
+          category: containers
+        annotations:
+          summary: "Container {{ $labels.name }} restarted more than 3 times in the last hour"
+          description: "Frequent restarts usually indicate a crash loop, failed health check, or resource exhaustion on {{ $labels.instance }}."
+
+  - name: infrawatch-endpoint-alerts
+    interval: 30s
+    rules:
+      - alert: EndpointProbeFailed
+        expr: probe_success{job=~"blackbox-.*"} == 0
+        for: 3m
+        labels:
+          severity: critical
+          category: availability
+        annotations:
+          summary: "{{ $labels.probe_kind | toUpper }} probe failed for {{ $labels.instance }}"
+          description: "Blackbox Exporter could not complete the {{ $labels.probe_kind }} probe for {{ $labels.target }} for 3 minutes. Check DNS, routing, firewall rules, TLS and the remote service."
+
+      - alert: EndpointResponseSlow
+        expr: probe_duration_seconds{job=~"blackbox-.*"} > 2
+        for: 10m
+        labels:
+          severity: warning
+          category: latency
+        annotations:
+          summary: "Slow response from {{ $labels.instance }}"
+          description: "The probe has taken longer than 2 seconds for 10 minutes (current {{ $value | printf \"%.2f\" }}s)."
+
+      - alert: EndpointHTTPError
+        expr: probe_http_status_code{job="blackbox-http"} >= 500
+        for: 5m
+        labels:
+          severity: warning
+          category: availability
+        annotations:
+          summary: "{{ $labels.instance }} returns HTTP {{ $labels.status_code }}"
+          description: "The monitored endpoint has returned a server error for 5 minutes."
+
+      - alert: DNSCheckFailing
+        expr: probe_success{job="blackbox-dns"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          category: dns
+        annotations:
+          summary: "DNS resolution failed for {{ $labels.instance }}"
+          description: "The DNS probe has not received a NOERROR response for 5 minutes."
+
+      - alert: TLSCertificateExpiringSoon
+        expr: (probe_ssl_earliest_cert_expiry{job="blackbox-http"} - time()) / 86400 < 21
+        for: 1h
+        labels:
+          severity: warning
+          category: tls
+        annotations:
+          summary: "TLS certificate for {{ $labels.instance }} expires in {{ $value | printf \"%.0f\" }} days"
+          description: "Renew the certificate before it expires. This alert uses the earliest certificate in the presented chain."
+
+      - alert: TLSCertificateExpiryCritical
+        expr: (probe_ssl_earliest_cert_expiry{job="blackbox-http"} - time()) / 86400 < 7
+        for: 15m
+        labels:
+          severity: critical
+          category: tls
+        annotations:
+          summary: "TLS certificate for {{ $labels.instance }} expires in under 7 days"
+          description: "Immediate renewal is required to avoid an outage."
+
+  - name: infrawatch-process-alerts
+    interval: 30s
+    rules:
+      - alert: ProcessExporterUnavailable
+        expr: up{job="process"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          category: processes
+        annotations:
+          summary: "process-exporter is unavailable on {{ $labels.instance }}"
+          description: "Process metrics have not been scraped for 5 minutes."
+
+      - alert: ProcessCPUUsageHigh
+        expr: sum by (instance, server_id, groupname) (rate(namedprocess_namegroup_cpu_seconds_total{job="process"}[5m])) * 100 > 80
+        for: 15m
+        labels:
+          severity: warning
+          category: processes
+        annotations:
+          summary: "Process group {{ $labels.groupname }} CPU usage is above 80% on {{ $labels.instance }}"
+          description: "Process group CPU usage has remained above 80% for 15 minutes."
+
+      - alert: ProcessGroupMissing
+        expr: namedprocess_namegroup_num_procs{job="process"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          category: processes
+        annotations:
+          summary: "Process group {{ $labels.groupname }} has no running processes on {{ $labels.instance }}"
+          description: "process-exporter reports zero processes for this group. The service may have stopped or restarted under a different name."
+
+      - alert: ProcessGroupRestarted
+        expr: changes(namedprocess_namegroup_oldest_start_time_seconds{job="process"}[30m]) > 0 and namedprocess_namegroup_num_procs{job="process"} > 0
+        for: 5m
+        labels:
+          severity: info
+          category: processes
+        annotations:
+          summary: "Process group {{ $labels.groupname }} restarted on {{ $labels.instance }}"
+          description: "The oldest process start time changed within the last 30 minutes, indicating a restart or restart loop."
+
+  - name: infrawatch-windows-alerts
+    interval: 30s
+    rules:
+      - alert: WindowsExporterUnavailable
+        expr: up{job="windows"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          category: windows
+        annotations:
+          summary: "windows_exporter is unavailable on {{ $labels.instance }}"
+          description: "Windows metrics have not been scraped for 5 minutes. Check the windows_exporter service and inbound TCP/9182 firewall rules."
+
+      - alert: WindowsCPUUsageHigh
+        expr: 100 * (1 - avg by (instance, server_id) (rate(windows_cpu_time_total{job="windows",mode="idle"}[5m]))) > 85
+        for: 10m
+        labels:
+          severity: warning
+          category: windows
+        annotations:
+          summary: "Windows CPU usage is above 85% on {{ $labels.instance }}"
+          description: "CPU usage has remained above 85% for 10 minutes."
+
+      - alert: WindowsMemoryUsageHigh
+        expr: 100 * (1 - (windows_memory_available_bytes{job="windows"} / windows_cs_physical_memory_bytes{job="windows"})) > 90
+        for: 10m
+        labels:
+          severity: warning
+          category: windows
+        annotations:
+          summary: "Windows memory usage is above 90% on {{ $labels.instance }}"
+          description: "Available physical memory has been below 10% for 10 minutes."
+
+      - alert: WindowsDiskSpaceLow
+        expr: 100 * (1 - (windows_logical_disk_free_bytes{job="windows"} / windows_logical_disk_size_bytes{job="windows"})) > 90
+        for: 10m
+        labels:
+          severity: warning
+          category: windows
+        annotations:
+          summary: "Windows volume {{ $labels.volume }} is above 90% usage on {{ $labels.instance }}"
+          description: "Free space on this volume has been below 10% for 10 minutes."
+
+      # windows_exporter 0.32 exposes one series per service and state, including
+      # manual/disabled services that are stopped by design. Alert only when an
+      # automatic-start service is stopped.
+      - alert: WindowsAutomaticServiceNotRunning
+        expr: |
+          windows_service_state{job="windows",state="stopped"} == 1
+            and on (instance, service) (windows_service_start_mode{job="windows",start_mode="auto"} == 1)
+        for: 15m
+        labels:
+          severity: warning
+          category: windows
+        annotations:
+          summary: "Windows service {{ $labels.service }} is stopped on {{ $labels.instance }}"
+          description: "An automatic-start Windows service has been stopped for 15 minutes. Manual and disabled services are ignored."

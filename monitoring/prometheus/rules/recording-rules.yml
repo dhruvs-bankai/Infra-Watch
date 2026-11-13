@@ -1,0 +1,43 @@
+groups:
+  - name: infrawatch-recording
+    interval: 30s
+    rules:
+      # Host resources: reuse these instead of recomputing rates in every panel.
+      - record: instance:node_cpu_utilization:ratio
+        expr: 1 - avg by (instance, server_id, environment) (rate(node_cpu_seconds_total{job="node",mode="idle"}[5m]))
+
+      - record: instance:node_memory_utilization:ratio
+        expr: 1 - node_memory_MemAvailable_bytes{job="node"} / node_memory_MemTotal_bytes{job="node"}
+
+      - record: instance:node_filesystem_utilization:ratio
+        expr: |
+          max by (instance, server_id, environment, mountpoint) (
+            1 - node_filesystem_avail_bytes{job="node",fstype!~"tmpfs|devtmpfs|overlay|squashfs|nsfs|ramfs"}
+              / node_filesystem_size_bytes{job="node",fstype!~"tmpfs|devtmpfs|overlay|squashfs|nsfs|ramfs"}
+          )
+
+      - record: instance:windows_cpu_utilization:ratio
+        expr: 1 - avg by (instance) (rate(windows_cpu_time_seconds_total{job="windows",mode="idle"}[5m]))
+
+      # Blackbox: worst probe result per target and probe kind.
+      - record: instance:blackbox_probe_success:min
+        expr: min by (instance, job, probe_kind) (probe_success)
+
+      # Application instrumentation.
+      - record: route:infrawatch_http_request_rate5m
+        expr: sum by (route, status) (rate(infrawatch_http_requests_total[5m]))
+
+      - record: job:infrawatch_http_request_rate5m
+        expr: sum(rate(infrawatch_http_requests_total[5m]))
+
+      - record: job:infrawatch_http_error_ratio5m
+        expr: |
+          sum(rate(infrawatch_http_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(infrawatch_http_requests_total[5m])), 0.001)
+
+      - record: job:infrawatch_http_latency_p95_5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(infrawatch_http_request_duration_seconds_bucket[5m])))
+
+      # Nginx exporter.
+      - record: job:nginx_requests:rate5m
+        expr: sum(rate(nginx_http_requests_total[5m]))
