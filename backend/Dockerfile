@@ -1,4 +1,4 @@
-FROM python:3.11.14-slim-bookworm
+FROM python:3.11.18-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -7,7 +7,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && pip install --no-cache-dir -r requirements.txt \
+    && rm -rf /usr/local/lib/python3.11/ensurepip/_bundled/*.whl \
+    && rm -f /usr/local/lib/python3.11/site-packages/pip/_vendor/bom.cdx.json
 
 COPY app ./app
 COPY migrations ./migrations
